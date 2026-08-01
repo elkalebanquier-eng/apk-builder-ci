@@ -1,0 +1,54 @@
+name: Build APK (Web)
+
+on:
+  push:
+    paths:
+      - 'incoming/web/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Read job id
+        id: job
+        run: echo "id=$(cat incoming/web/job.json | node -pe 'JSON.parse(require(\"fs\").readFileSync(0)).id' 2>/dev/null || date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare Capacitor project
+        run: |
+          mkdir -p build-web/www
+          find incoming/web -mindepth 1 -maxdepth 1 ! -name 'job.json' -exec cp -r {} build-web/www/ \;
+          cd build-web
+          npm init -y
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+          npx cap init "GeneratedApp" "com.kiko.generated.${{ steps.job.outputs.id }}" --web-dir www
+          npx cap add android
+
+      - name: Build APK
+        run: |
+          cd build-web/android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-web-${{ steps.job.outputs.id }}
+          name: "Web build ${{ steps.job.outputs.id }}"
+          files: build-web/android/app/build/outputs/apk/debug/app-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
