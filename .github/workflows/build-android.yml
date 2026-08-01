@@ -1,0 +1,50 @@
+name: Build APK (Android/Kotlin)
+
+on:
+  push:
+    paths:
+      - 'incoming/android/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Read job id
+        id: job
+        run: echo "id=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Unzip project
+        run: |
+          mkdir -p build-android
+          unzip -o incoming/android/project.zip -d build-android
+
+      - name: Build APK
+        run: |
+          cd build-android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Locate APK
+        id: apk
+        run: |
+          apk_path=$(find build-android -name "*-debug.apk" -o -name "*.apk" | head -n 1)
+          echo "path=$apk_path" >> "$GITHUB_OUTPUT"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-android-${{ steps.job.outputs.id }}
+          name: "Android build ${{ steps.job.outputs.id }}"
+          files: ${{ steps.apk.outputs.path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
