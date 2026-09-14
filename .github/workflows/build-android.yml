@@ -1,9 +1,10 @@
-name: Build APK (Android/Kotlin)
+name: Build APK (Android and Web)
 
 on:
   push:
-    paths:
-      - 'incoming/android/**'
+    paths: ["incoming/android/**"]
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -12,39 +13,63 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup JDK
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '17'
-
-      - name: Read job id
+      - name: Find queued build
         id: job
-        run: echo "id=$(date +%s)" >> "$GITHUB_OUTPUT"
-
-      - name: Unzip project
+        env:
+          RELAY: https://pzwhiqjnjmwosfyufwny.supabase.co/functions/v1/build-relay
+          API_KEY: sb_publishable_nwgB40SU7ixxBP8_bbyp-w_3cT2XlFt
         run: |
-          mkdir -p build-android
-          unzip -o incoming/android/project.zip -d build-android
-
-      - name: Build APK
+          response=$(curl -fsS -H "apikey: $API_KEY" "$RELAY/builds/next" || true)
+          if [ -z "$response" ] || [ "$response" = "null" ]; then echo "No queued build"; exit 0; fi
+          echo "$response" > job.json
+          echo "id=$(node -p 'JSON.parse(require("fs").readFileSync("job.json")).id')" >> "$GITHUB_OUTPUT"
+      - name: Build queued project
+        if: steps.job.outputs.id != ''
+        env:
+          RELAY: https://pzwhiqjnjmwosfyufwny.supabase.co/functions/v1/build-relay
+          API_KEY: sb_publishable_nwgB40SU7ixxBP8_bbyp-w_3cT2XlFt
         run: |
-          cd build-android
-          chmod +x gradlew
-          ./gradlew assembleDebug
-
-      - name: Locate APK
-        id: apk
-        run: |
-          apk_path=$(find build-android -name "*-debug.apk" -o -name "*.apk" | head -n 1)
-          echo "path=$apk_path" >> "$GITHUB_OUTPUT"
-
-      - name: Create Release
+          mkdir -p work
+          type=$(node -p 'JSON.parse(require("fs").readFileSync("job.json")).projectType')
+          url=$(node -p 'JSON.parse(require("fs").readFileSync("job.json")).sourceUrl')
+          curl -fsSL -H "apikey: $API_KEY" "$url" -o work/project.zip
+          if [ "$type" = "html" ]; then
+            mkdir -p work/www
+            unzip -q work/project.zip -d work/www
+            cd work
+            npm init -y >/dev/null 2>&1
+            npm install @capacitor/core @capacitor/cli @capacitor/android >/dev/null 2>&1
+            npx cap init "Createur Dapli App" "com.createurdapli.generated" --web-dir www >/dev/null
+            npx cap add android >/dev/null
+            cd android && ./gradlew assembleDebug
+            apk=$(find app/build/outputs/apk/debug -name "*.apk" | head -1)
+          else
+            unzip -q work/project.zip -d work/android
+            cd work/android && chmod +x gradlew && ./gradlew assembleDebug
+            apk=$(find . -name "*-debug.apk" -o -name "*.apk" | head -1)
+          fi
+          cp "$apk" "$GITHUB_WORKSPACE/app-debug.apk"
+      - name: Publish APK release
+        if: steps.job.outputs.id != ''
+        id: release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-android-${{ steps.job.outputs.id }}
-          name: "Android build ${{ steps.job.outputs.id }}"
-          files: ${{ steps.apk.outputs.path }}
+          tag_name: build-${{ steps.job.outputs.id }}
+          name: "Createur Dapli APK ${{ steps.job.outputs.id }}"
+          files: app-debug.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Notify app
+        if: steps.job.outputs.id != ''
+        env:
+          RELAY: https://pzwhiqjnjmwosfyufwny.supabase.co/functions/v1/build-relay
+          API_KEY: sb_publishable_nwgB40SU7ixxBP8_bbyp-w_3cT2XlFt
+          BUILD_ID: ${{ steps.job.outputs.id }}
+          APK_URL: https://github.com/${{ github.repository }}/releases/download/build-${{ steps.job.outputs.id }}/app-debug.apk
+        run: |
+          curl -fsS -X POST -H "apikey: $API_KEY" -H "Content-Type: application/json" "$RELAY/builds/$BUILD_ID/publisher-complete" -d "{\"artifactUrl\":\"$APK_URL\"}"
