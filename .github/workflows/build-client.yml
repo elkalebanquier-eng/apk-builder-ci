@@ -1,0 +1,37 @@
+name: Build Createur Dapli Client
+
+on:
+  push:
+    paths:
+      - "incoming/android/project.zip"
+      - ".github/workflows/build-client.yml"
+  workflow_dispatch:
+
+jobs:
+  build-client:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Build client APK
+        run: |
+          rm -rf build-client
+          mkdir build-client
+          unzip -q incoming/android/project.zip -d build-client
+          cd build-client
+          chmod +x gradlew
+          ./gradlew assembleDebug
+          find app/build/outputs/apk/debug -name '*.apk' -print -exec cp {} "$GITHUB_WORKSPACE/createur-dapli-debug.apk" \;
+      - name: Publish debug APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: client-${{ github.run_id }}
+          name: "Créateur Dapli — APK debug ${{ github.run_id }}"
+          files: createur-dapli-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
